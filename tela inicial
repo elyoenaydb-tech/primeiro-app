@@ -1,1 +1,209 @@
+import customtkinter as ctk
+import sqlite3
+import bcrypt
+import re
+import os
 
+# Configurações visuais do CustomTkinter
+ctk.set_appearance_mode("light")
+
+
+class ServiceCleanApp(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+
+        # Configurações da Janela
+        self.title("Service Clean - Login")
+        self.geometry("400x600")
+        self.resizable(False, False)
+        self.configure(fg_color="#F5F5F7")  # Fundo neutro/off-white
+
+        # Paleta de Cores
+        self.COR_MARROM = "#6F4E37"
+        self.COR_MARROM_HOVER = "#593E2B"
+        self.COR_ERRO = "#D32F2F"
+
+        # Inicializa o Banco de Dados
+        self.inicializar_banco()
+
+        # Cria a interface do usuário
+        self.criar_componentes()
+
+        # Verifica se existe um usuário salvo no "Lembrar de mim"
+        self.verificar_usuario_lembrado()
+
+    def inicializar_banco(self):
+        """Cria o banco de dados e a tabela de usuários se não existirem, inserindo um usuário de teste."""
+        self.conn = sqlite3.connect("service_clean.db")
+        self.cursor = self.conn.cursor()
+
+        # Tabela de usuários
+        self.cursor.execute("""
+                            CREATE TABLE IF NOT EXISTS usuarios
+                            (
+                                id
+                                INTEGER
+                                PRIMARY
+                                KEY
+                                AUTOINCREMENT,
+                                email
+                                TEXT
+                                UNIQUE
+                                NOT
+                                NULL,
+                                senha
+                                TEXT
+                                NOT
+                                NULL
+                            )
+                            """)
+
+        # Tabela para guardar a sessão do "Lembrar de mim"
+        self.cursor.execute("""
+                            CREATE TABLE IF NOT EXISTS sessao
+                            (
+                                id
+                                INTEGER
+                                PRIMARY
+                                KEY
+                                CHECK
+                            (
+                                id =
+                                1
+                            ),
+                                email TEXT NOT NULL,
+                                lembrar INTEGER DEFAULT 0
+                                )
+                            """)
+        self.conn.commit()
+
+        # Inserir um usuário de teste real (se já não existir)
+        try:
+            senha_teste = "Senha123!".encode('utf-8')
+            senha_criptografada = bcrypt.hashpw(senha_teste, bcrypt.gensalt()).decode('utf-8')
+            self.cursor.execute("INSERT INTO usuarios (email, senha) VALUES (?, ?)",
+                                ("teste@gmail.com", senha_criptografada))
+            self.conn.commit()
+        except sqlite3.IntegrityError:
+            pass  # Usuário de teste já cadastrado
+
+    def criar_componentes(self):
+        # Título
+        lbl_titulo = ctk.CTkLabel(self, text="Service Clean", font=ctk.CTkFont(family="Arial", size=32, weight="bold"),
+                                  text_color=self.COR_MARROM)
+        lbl_titulo.pack(pady=(50, 5))
+
+        lbl_subtitulo = ctk.CTkLabel(self, text="Escolha profissionais e agende serviços", font=ctk.CTkFont(size=13),
+                                     text_color="#777777")
+        lbl_subtitulo.pack(pady=(0, 30))
+
+        # Mensagem de Feedback/Erro dinâmicas
+        self.lbl_status = ctk.CTkLabel(self, text="", font=ctk.CTkFont(size=12, weight="bold"),
+                                       text_color=self.COR_ERRO)
+        self.lbl_status.pack(pady=(0, 10))
+
+        # Campo E-mail
+        self.txt_email = ctk.CTkEntry(self, placeholder_text="Digite seu e-mail", width=300, height=45,
+                                      border_color="#D1D1D6", fg_color="#FFFFFF")
+        self.txt_email.pack(pady=10)
+
+        # Campo Senha
+        self.txt_senha = ctk.CTkEntry(self, placeholder_text="Digite sua senha", show="*", width=300, height=45,
+                                      border_color="#D1D1D6", fg_color="#FFFFFF")
+        self.txt_senha.pack(pady=10)
+
+        # Checkbox "Lembrar de mim"
+        # Checkbox "Lembrar de mim" corrigido
+        self.chk_lembrar = ctk.CTkCheckBox(
+            self,
+            text="Lembrar de mim",
+            font=ctk.CTkFont(size=12),
+            text_color="#555555",
+            border_color="#D1D1D6",
+            hover_color="#E5E5EA",
+            fg_color=self.COR_MARROM
+        )
+        self.chk_lembrar.pack(pady=(5, 20), padx=50, anchor="w")
+
+        self.chk_lembrar.pack(pady=(5, 20), padx=50, anchor="w")
+
+        # Botão Entrar
+        btn_entrar = ctk.CTkButton(self, text="Entrar", command=self.executar_login, width=300, height=48,
+                                   font=ctk.CTkFont(size=16, weight="bold"), fg_color=self.COR_MARROM,
+                                   hover_color=self.COR_MARROM_HOVER, text_color="#FFFFFF")
+        btn_entrar.pack(pady=10)
+
+        # Botão Cadastrar
+        btn_cadastro = ctk.CTkButton(self, text="Não tem uma conta? Cadastre-se", font=ctk.CTkFont(size=13),
+                                     text_color="#555555", fg_color="transparent", hover_color="#E5E5EA",
+                                     command=self.ir_para_cadastro)
+        btn_cadastro.pack(pady=(20, 0))
+
+    def validar_email_real(self, email):
+        """Validação usando Expressão Regular (Regex) para checar se o formato do e-mail é válido."""
+        padrao = r'^[\w\.-]+@[\w\.-]+\.\w+$'
+        return re.match(padrao, email) is not None
+
+    def executar_login(self):
+        email = self.txt_email.get().strip()
+        senha = self.txt_senha.get()
+
+        # 1. Validações de preenchimento e formato
+        if not email or not senha:
+            self.exibir_erro("Por favor, preencha todos os campos.")
+            return
+
+        if not self.validar_email_real(email):
+            self.exibir_erro("Formato de e-mail inválido (ex: nome@email.com).")
+            return
+
+        # 2. Busca o usuário no Banco de Dados Real
+        self.cursor.execute("SELECT senha FROM usuarios WHERE email = ?", (email,))
+        resultado = self.cursor.fetchone()
+
+        if resultado:
+            senha_criptografada_db = resultado[0].encode('utf-8')
+
+            # 3. Compara a senha digitada com o hash criptografado do banco
+            if bcrypt.checkpw(senha.encode('utf-8'), senha_criptografada_db):
+                self.lbl_status.configure(text_color="green", text="Login efetuado com sucesso!")
+                self.gerenciar_lembrete_usuario(email)
+                # Aqui você chamaria a próxima tela do aplicativo
+            else:
+                self.exibir_erro("E-mail ou senha incorretos.")
+        else:
+            self.exibir_erro("E-mail ou senha incorretos.")
+
+    def gerenciar_lembrete_usuario(self, email):
+        """Salva ou limpa as credenciais no banco se o 'Lembrar de mim' estiver marcado."""
+        if self.chk_lembrar.get() == 1:
+            self.cursor.execute("INSERT OR REPLACE INTO sessao (id, email, lembrar) VALUES (1, ?, 1)", (email,))
+        else:
+            self.cursor.execute("DELETE FROM sessao WHERE id = 1")
+        self.conn.commit()
+
+    def verificar_usuario_lembrado(self):
+        """Preenche automaticamente o e-mail e marca o checkbox se o usuário pediu para ser lembrado."""
+        self.cursor.execute("SELECT email FROM sessao WHERE id = 1 AND lembrar = 1")
+        resultado = self.cursor.fetchone()
+        if resultado:
+            self.txt_email.insert(0, resultado[0])
+            self.chk_lembrar.select()
+
+    def exibir_erro(self, mensagem):
+        self.lbl_status.configure(text_color=self.COR_ERRO, text=mensagem)
+
+    def ir_para_cadastro(self):
+        print("Direcionando para a tela de cadastro...")
+
+    def __del__(self):
+        # Fecha a conexão com o banco de dados quando o app fecha
+        try:
+            self.conn.close()
+        except:
+            pass
+
+
+if __name__ == "__main__":
+    app = ServiceCleanApp()
+    app.mainloop()
