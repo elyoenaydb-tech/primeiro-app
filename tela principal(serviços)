@@ -1,1 +1,204 @@
+import customtkinter as ctk
 
+# Configurações visuais do CustomTkinter
+ctk.set_appearance_mode("light")
+
+
+class ServiceCleanDashboard:
+    pass
+
+
+class ServiceCleanDashboard(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+
+        # Configurações da Janela Principal
+        self.title("Service Clean - Encontre Profissionais")
+        self.geometry("480x700")
+        self.resizable(False, False)
+        self.configure(fg_color="#F5F5F7")  # Fundo neutro/off-white
+
+        # Paleta de Cores
+        self.COR_MARROM = "#6F4E37"
+        self.COR_MARROM_HOVER = "#593E2B"
+        self.COR_TEXTO = "#333333"
+
+        # Banco de Dados Simulado (Simulando uma API/Banco Real de Profissionais Próximos)
+        self.profissionais_por_categoria = {
+            "Diarista": [
+                {"nome": "Maria Silva", "avaliacao": "4.9 ⭐", "preco": "R$ 150/dia", "bairro": "Centro (0.5 km)", "horarios": ["Seg 08:00", "Qua 14:00"], "comentarios": ["Excelente limpeza!", "Muito pontual e caprichosa."]},
+                {"nome": "Ana Souza", "avaliacao": "4.7 ⭐", "preco": "R$ 140/dia", "bairro": "Vila Nova (1.2 km)", "horarios": ["Ter 09:00", "Sexta 13:00"], "comentarios": ["Recomendo fortemente.", "Deixou tudo brilhando."]}
+            ],
+            "Eletricista": [
+                {"nome": "Carlos Roberto", "avaliacao": "4.8 ⭐", "preco": "R$ 120/visita", "bairro": "Jardins (0.8 km)", "horarios": ["Ter 10:00", "Qui 16:00"], "comentarios": ["Resolveu o curto rápido.", "Preço justo."]}
+            ],
+            "Encanador": [
+                {"nome": "Marcos Lima", "avaliacao": "5.0 ⭐", "preco": "R$ 100/hora", "bairro": "Centro (0.2 km)", "horarios": ["Hoje 15:00", "Amanhã 09:00"], "comentarios": ["Trocou a tubulação perfeitamente."]}
+            ]
+        }
+
+        # Lista com as 12 Profissões mais procuradas do Brasil
+        self.profissoes = [
+            "Diarista", "Eletricista", "Encanador", "Pintor",
+            "Pedreiro", "Marceneiro", "Mecânico", "Chaveiro",
+            "Montador de Móveis", "Técnico de TI", "Jardineiro", "Lavador de Sofá"
+        ]
+
+        # Container Principal dinâmico para alternar telas
+        self.container = ctk.CTkFrame(self, fg_color="transparent")
+        self.container.pack(fill="both", expand=True)
+
+        # Inicia mostrando o Catálogo de Profissões
+        self.exibir_catalogo_profissoes()
+
+    def limpar_tela(self):
+        """Remove todos os componentes atuais para carregar uma nova tela."""
+        for widget in self.container.winfo_children():
+            widget.destroy()
+
+    # ================= TELA 1: CATALOGO DE PROFISSÕES =================
+    def exibir_catalogo_profissoes(self):
+        self.limpar_tela()
+
+        # Cabeçalho
+        lbl_titulo = ctk.CTkLabel(self.container, text="Service Clean", font=ctk.CTkFont(family="Arial", size=26, weight="bold"), text_color=self.COR_MARROM)
+        lbl_titulo.pack(pady=(25, 5))
+
+        lbl_subtitulo = ctk.CTkLabel(self.container, text="Selecione a categoria de serviço desejada", font=ctk.CTkFont(size=12), text_color="#777777")
+        lbl_subtitulo.pack(pady=(0, 20))
+
+        # Scrollable Frame para agrupar os botões em formato de grid / lista vertical
+        scroll_frame = ctk.CTkScrollableFrame(self.container, width=420, height=540, fg_color="transparent")
+        scroll_frame.pack(pady=10, fill="both", expand=True)
+
+        # Gerar os 12 botões dinamicamente
+        for profissao in self.profissoes:
+            btn = ctk.CTkButton(
+                scroll_frame,
+                text=profissao,
+                font=ctk.CTkFont(size=15, weight="bold"),
+                fg_color="#FFFFFF",
+                text_color=self.COR_TEXTO,
+                hover_color="#E5E5EA",
+                border_color="#D1D1D6",
+                border_width=1,
+                height=55,
+                anchor="w",  # Texto alinhado à esquerda
+                command=lambda p=profissao: self.exibir_profissionais_perto(p)
+            )
+            btn.pack(pady=6, fill="x", padx=10)
+
+    # ================= TELA 2: LISTA DE PROFISSIONAIS PERTO =================
+    def exibir_profissionais_perto(self, profissao):
+        self.limpar_tela()
+
+        # Barra superior com botão Voltar
+        barra_topo = ctk.CTkFrame(self.container, fg_color="transparent", height=40)
+        barra_topo.pack(fill="x", pady=(15, 5), padx=10)
+
+        btn_voltar = ctk.CTkButton(barra_topo, text="← Voltar", width=70, fg_color="transparent", text_color=self.COR_MARROM, font=ctk.CTkFont(weight="bold"), command=self.exibir_catalogo_profissoes)
+        btn_voltar.pack(side="left")
+
+        lbl_profissao = ctk.CTkLabel(barra_topo, text=profissao, font=ctk.CTkFont(size=18, weight="bold"), text_color=self.COR_TEXTO)
+        lbl_profissao.pack(side="right", padx=15)
+
+        # Buscar profissionais cadastrados da categoria escolhida
+        lista_prestadores = self.profissionais_por_categoria.get(profissao, [])
+
+        if not lista_prestadores:
+            lbl_aviso = ctk.CTkLabel(self.container, text=f"Nenhum profissional de '{profissao}'\nencontrado perto de você no momento.", font=ctk.CTkFont(size=14), text_color="#777777")
+            lbl_aviso.pack(pady=100)
+            return
+
+        scroll_profissionais = ctk.CTkScrollableFrame(self.container, fg_color="transparent")
+        scroll_profissionais.pack(fill="both", expand=True, padx=10, pady=10)
+
+        for prof in lista_prestadores:
+            # Card do profissional
+            card = ctk.CTkFrame(scroll_profissionais, fg_color="#FFFFFF", border_color="#E5E5EA", border_width=1, height=100)
+            card.pack(fill="x", pady=8, padx=5)
+
+            # Foto simulada (Círculo ou quadrado cinza com iniciais)
+            foto_perfil = ctk.CTkFrame(card, width=50, height=50, fg_color="#E5E5EA", corner_radius=25)
+            foto_perfil.place(x=15, y=15)
+            lbl_letras = ctk.CTkLabel(foto_perfil, text=prof["nome"][:2].upper(), font=ctk.CTkFont(size=14, weight="bold"), text_color="#777777")
+            lbl_letras.place(relx=0.5, rely=0.5, anchor="center")
+
+            # Nome e Distância
+            lbl_nome = ctk.CTkLabel(card, text=prof["nome"], font=ctk.CTkFont(size=15, weight="bold"), text_color=self.COR_TEXTO)
+            lbl_nome.place(x=80, y=12)
+
+            lbl_distancia = ctk.CTkLabel(card, text=f"📍 {prof['bairro']}", font=ctk.CTkFont(size=11), text_color="#777777")
+            lbl_distancia.place(x=80, y=35)
+
+            # Avaliação e Preço
+            lbl_dados = ctk.CTkLabel(card, text=f"{prof['avaliacao']}  •  {prof['preco']}", font=ctk.CTkFont(size=12, weight="bold"), text_color=self.COR_MARROM)
+            lbl_dados.place(x=80, y=55)
+
+            # Botão invisível sobre o card ou botão de ação para ver detalhes
+            btn_ver = ctk.CTkButton(
+                card, text="Ver Perfil", width=80, height=30,
+                fg_color=self.COR_MARROM, hover_color=self.COR_MARROM_HOVER,
+                command=lambda p=prof: self.exibir_perfil_detalhado(p, profissao)
+            )
+            btn_ver.place(x=320, y=30)
+
+    # ================= TELA 3: PERFIL DETALHADO DO PROFISSIONAL =================
+    def exibir_perfil_detalhado(self, prof, profissao_origem):
+        self.limpar_tela()
+
+        # Botão voltar para a lista anterior
+        btn_voltar = ctk.CTkButton(self.container, text="← Ver outros profissionais", fg_color="transparent", text_color=self.COR_MARROM, font=ctk.CTkFont(weight="bold"), command=lambda: self.exibir_profissionais_perto(profissao_origem))
+        btn_voltar.pack(anchor="w", padx=15, pady=(15, 10))
+
+        # Área de Foto do perfil ampliada
+        foto_grande = ctk.CTkFrame(self.container, width=90, height=90, fg_color="#E5E5EA", corner_radius=45)
+        foto_grande.pack(pady=10)
+        lbl_iniciais_g = ctk.CTkLabel(foto_grande, text=prof["nome"][:2].upper(), font=ctk.CTkFont(size=24, weight="bold"), text_color="#777777")
+        lbl_iniciais_g.place(relx=0.5, rely=0.5, anchor="center")
+
+        # Informações Básicas
+        lbl_nome = ctk.CTkLabel(self.container, text=prof["nome"], font=ctk.CTkFont(size=22, weight="bold"), text_color=self.COR_TEXTO)
+        lbl_nome.pack()
+
+        lbl_info = ctk.CTkLabel(self.container, text=f"{prof['avaliacao']}   |   Preço de referência: {prof['preco']}", font=ctk.CTkFont(size=13, weight="bold"), text_color=self.COR_MARROM)
+        lbl_info.pack(pady=5)
+
+        # Seção 1: Horários Disponíveis
+        lbl_sec_horarios = ctk.CTkLabel(self.container, text="📅 Horários e Dias Disponíveis", font=ctk.CTkFont(size=14, weight="bold"), text_color=self.COR_TEXTO)
+        lbl_sec_horarios.pack(anchor="w", padx=25, pady=(15, 5))
+
+        frame_horarios = ctk.CTkFrame(self.container, fg_color="#FFFFFF", border_color="#E5E5EA", border_width=1)
+        frame_horarios.pack(fill="x", padx=20, pady=5)
+
+        for hora in prof["horarios"]:
+            btn_hora = ctk.CTkButton(frame_horarios, text=hora, fg_color="#F5F5F7", text_color=self.COR_TEXTO, hover_color="#E5E5EA", height=35)
+            btn_hora.pack(fill="x", padx=15, pady=5)
+
+        # Seção 2: Comentários e Avaliações de Clientes
+        lbl_sec_comentarios = ctk.CTkLabel(self.container, text="💬 Comentários Recentes", font=ctk.CTkFont(size=14, weight="bold"), text_color=self.COR_TEXTO)
+        lbl_sec_comentarios.pack(anchor="w", padx=25, pady=(15, 5))
+
+        scroll_comentarios = ctk.CTkScrollableFrame(self.container, height=130, fg_color="transparent")
+        scroll_comentarios.pack(fill="x", padx=20)
+
+        for coment in prof["comentarios"]:
+            box_coment = ctk.CTkFrame(scroll_comentarios, fg_color="#FFFFFF", border_color="#E5E5EA", border_width=1)
+            box_coment.pack(fill="x", pady=4)
+            lbl_txt_coment = ctk.CTkLabel(box_coment, text=f'"{coment}"', font=ctk.CTkFont(size=12, italic=True), text_color="#555555", wraplength=360, justify="left")
+            lbl_txt_coment.pack(padx=10, pady=8)
+
+            # Botão de Agendamento Final (Ajustado para fluxo de layout vertical contínuo)
+            btn_agendar = ctk.CTkButton(
+                self.container,
+                text="Solicitar Agendamento",
+                font=ctk.CTkFont(size=16, weight="bold"),
+                fg_color=self.COR_MARROM,
+                hover_color=self.COR_MARROM_HOVER,
+                height=48
+            )
+            btn_agendar.pack(fill="x", padx=20, pady=20)
+
+if __name__ == "__main__":
+    app = ServiceCleanDashboard()
+    app.mainloop()
