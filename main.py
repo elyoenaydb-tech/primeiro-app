@@ -1,411 +1,572 @@
-import flet as ft
+"""
+main.py
+Service Clean - App completo e funcional (ponto de entrada).
 
-# 1. BANCO DE DADOS SIMULADO (Mock Data)
-PROFISSIONAIS = [
-    {
-        "id": 1,
-        "nome": "Carlos Silva",
-        "area": "Encanador",
-        "preco": 100.0,
-        "localizacao": "São Paulo",
-        "foto": "https://unsplash.com",
-        "habilidades": "Vazamentos, Reparos hidráulicos urgentes, Desentupimento residencial.",
-        "avaliacao": 4.8,
-        "comentarios": [
-            {"usuario": "Marcos A.",
-             "texto": "Excelente profissional! Chegou no horário e resolveu o vazamento rápido."},
-            {"usuario": "Julia F.", "texto": "Muito limpo e educado. Preço justo."}
-        ]
-    },
-    {
-        "id": 2,
-        "nome": "Ana Oliveira",
-        "area": "Eletricista",
-        "preco": 150.0,
-        "localizacao": "Campinas",
-        "foto": "https://unsplash.com",
-        "habilidades": "Instalações elétricas internas, Padrão de energia, Manutenção de quadros.",
-        "avaliacao": 4.9,
-        "comentarios": [
-            {"usuario": "Roberto C.", "texto": "Instalou o chuveiro e refez a fiação com muita técnica. Recomendo!"}
-        ]
-    },
-    {
-        "id": 3,
-        "nome": "Marcos Souza",
-        "area": "Pintor",
-        "preco": 80.0,
-        "localizacao": "Santos",
-        "foto": "https://unsplash.com",
-        "habilidades": "Pintura residencial interna, Grafiato, Texturas e Verniz.",
-        "avaliacao": 4.5,
-        "comentarios": [
-            {"usuario": "Fernanda M.", "texto": "Pintou minha sala perfeitamente, muito caprichoso."}
-        ]
-    }
-]
+Uma única janela (CTk) que alterna entre todas as telas do fluxo:
+  Login / Cadastro -> Catálogo -> Lista de Profissionais -> Perfil
+  -> Checkout (Pagamento Pix com split automático) -> Pós-checkout
+  -> Meus Agendamentos
+
+Executar:
+    pip install customtkinter bcrypt requests
+    python main.py
+"""
+
+import re
+import webbrowser
+import customtkinter as ctk
+from tkinter import messagebox
+
+import config
+from database import Database
+import pagamento
+import seguranca
+import modulo_compartilhamento as compartilhamento
+
+ctk.set_appearance_mode("light")
+
+EMAIL_REGEX = re.compile(r'^[\w.\-]+@[\w.\-]+\.\w+$')
 
 
-def main(page: ft.Page):
-    # Configurações globais da página (Cores Neutras)
-    page.title = "ServiceClean Pro"
-    page.bgcolor = "#F8F9FA"
-    page.padding = 20
-    page.scroll = "adaptive"
+class ServiceCleanApp(ctk.CTk):
+    """Janela única que gerencia a navegação entre todas as telas do app."""
 
-    # Estado global do aplicativo
-    profissional_selecionado = None
+    def __init__(self):
+        super().__init__()
 
-    # --- TELA: CENTRAL DE SUPORTE ---
-    def show_suporte_screen():
-        page.clean()
-        page.horizontal_alignment = "start"
-        page.vertical_alignment = "start"
-        page.floating_action_button = None
+        self.title("Service Clean")
+        self.geometry("480x720")
+        self.resizable(False, False)
+        self.configure(fg_color=config.COR_FUNDO)
 
-        chat_historico = ft.Column(scroll="always", height=300, spacing=10)
-        chat_historico.controls.append(
-            ft.Container(
-                content=ft.Text("🤖 Suporte: Olá! Como posso ajudar você hoje?", color="#212529"),
-                padding=10, bgcolor="#E9ECEF", border_radius=8
+        self.db = Database()
+        self.usuario_logado = None       # (nome, email)
+        self.agendamento_atual = None    # id do agendamento em andamento no checkout
+
+        self.protocol("WM_DELETE_WINDOW", self._ao_fechar)
+
+        self.container = ctk.CTkFrame(self, fg_color="transparent")
+        self.container.pack(fill="both", expand=True)
+
+        self.exibir_login()
+
+    # ------------------------------------------------------------------ #
+    # Utilidades de navegação
+    # ------------------------------------------------------------------ #
+    def limpar_tela(self):
+        for widget in self.container.winfo_children():
+            widget.destroy()
+
+    def _ao_fechar(self):
+        self.db.fechar()
+        self.destroy()
+
+    # ================= TELA: LOGIN ================= #
+    def exibir_login(self):
+        self.limpar_tela()
+        self.geometry("400x640")
+
+        ctk.CTkLabel(self.container, text="Service Clean",
+                     font=ctk.CTkFont(family="Arial", size=32, weight="bold"),
+                     text_color=config.COR_MARROM).pack(pady=(50, 5))
+        ctk.CTkLabel(self.container, text="Escolha profissionais e agende serviços",
+                     font=ctk.CTkFont(size=13), text_color="#777777").pack(pady=(0, 25))
+
+        self.lbl_status_login = ctk.CTkLabel(self.container, text="",
+                                              font=ctk.CTkFont(size=12, weight="bold"),
+                                              text_color=config.COR_ERRO)
+        self.lbl_status_login.pack(pady=(0, 10))
+
+        self.txt_email = ctk.CTkEntry(self.container, placeholder_text="Digite seu e-mail",
+                                       width=300, height=45, border_color=config.COR_BORDA,
+                                       fg_color=config.COR_CARD)
+        self.txt_email.pack(pady=10)
+
+        self.txt_senha = ctk.CTkEntry(self.container, placeholder_text="Digite sua senha", show="*",
+                                       width=300, height=45, border_color=config.COR_BORDA,
+                                       fg_color=config.COR_CARD)
+        self.txt_senha.pack(pady=10)
+        self.txt_senha.bind("<Return>", lambda e: self.executar_login())
+
+        self.chk_lembrar = ctk.CTkCheckBox(self.container, text="Lembrar de mim",
+                                            font=ctk.CTkFont(size=12), text_color="#555555",
+                                            border_color=config.COR_BORDA,
+                                            hover_color=config.COR_HOVER_CLARO,
+                                            fg_color=config.COR_MARROM)
+        self.chk_lembrar.pack(pady=(5, 20), padx=50, anchor="w")
+
+        ctk.CTkButton(self.container, text="Entrar", command=self.executar_login,
+                      width=300, height=48, font=ctk.CTkFont(size=16, weight="bold"),
+                      fg_color=config.COR_MARROM, hover_color=config.COR_MARROM_HOVER,
+                      text_color="#FFFFFF").pack(pady=10)
+
+        ctk.CTkButton(self.container, text="Não tem uma conta? Cadastre-se",
+                      font=ctk.CTkFont(size=13), text_color="#555555", fg_color="transparent",
+                      hover_color=config.COR_HOVER_CLARO, command=self.exibir_cadastro).pack(pady=(15, 0))
+
+        self._preencher_usuario_lembrado()
+
+    def _preencher_usuario_lembrado(self):
+        email_lembrado = self.db.obter_usuario_lembrado()
+        if email_lembrado:
+            self.txt_email.insert(0, email_lembrado)
+            self.chk_lembrar.select()
+
+    def executar_login(self):
+        email = seguranca.sanitizar_entrada(self.txt_email.get()).lower()
+        senha = self.txt_senha.get()
+
+        if not email or not senha:
+            self._erro_login("Por favor, preencha todos os campos.")
+            return
+        if not EMAIL_REGEX.match(email):
+            self._erro_login("Formato de e-mail inválido (ex: nome@email.com).")
+            return
+
+        autenticado, nome = self.db.autenticar(email, senha)
+        if not autenticado:
+            self._erro_login("E-mail ou senha incorretos.")
+            return
+
+        if self.chk_lembrar.get() == 1:
+            self.db.salvar_sessao(email)
+        else:
+            self.db.limpar_sessao()
+
+        self.usuario_logado = (nome, email)
+        self.exibir_catalogo_profissoes()
+
+    def _erro_login(self, mensagem):
+        self.lbl_status_login.configure(text_color=config.COR_ERRO, text=mensagem)
+
+    # ================= TELA: CADASTRO ================= #
+    def exibir_cadastro(self):
+        self.limpar_tela()
+        self.geometry("400x680")
+
+        ctk.CTkButton(self.container, text="← Voltar", width=70, fg_color="transparent",
+                      text_color=config.COR_MARROM, font=ctk.CTkFont(weight="bold"),
+                      command=self.exibir_login).pack(anchor="w", padx=15, pady=(15, 0))
+
+        ctk.CTkLabel(self.container, text="Criar Conta",
+                     font=ctk.CTkFont(size=26, weight="bold"),
+                     text_color=config.COR_MARROM).pack(pady=(15, 20))
+
+        self.lbl_status_cadastro = ctk.CTkLabel(self.container, text="",
+                                                 font=ctk.CTkFont(size=12, weight="bold"),
+                                                 text_color=config.COR_ERRO, wraplength=320)
+        self.lbl_status_cadastro.pack(pady=(0, 10))
+
+        self.txt_nome = ctk.CTkEntry(self.container, placeholder_text="Nome completo",
+                                      width=300, height=45, border_color=config.COR_BORDA,
+                                      fg_color=config.COR_CARD)
+        self.txt_nome.pack(pady=8)
+
+        self.txt_cad_email = ctk.CTkEntry(self.container, placeholder_text="E-mail",
+                                           width=300, height=45, border_color=config.COR_BORDA,
+                                           fg_color=config.COR_CARD)
+        self.txt_cad_email.pack(pady=8)
+
+        self.txt_cad_senha = ctk.CTkEntry(self.container, placeholder_text="Senha (letras e números)",
+                                           show="*", width=300, height=45, border_color=config.COR_BORDA,
+                                           fg_color=config.COR_CARD)
+        self.txt_cad_senha.pack(pady=8)
+
+        self.txt_cad_senha2 = ctk.CTkEntry(self.container, placeholder_text="Confirme a senha",
+                                            show="*", width=300, height=45, border_color=config.COR_BORDA,
+                                            fg_color=config.COR_CARD)
+        self.txt_cad_senha2.pack(pady=8)
+        self.txt_cad_senha2.bind("<Return>", lambda e: self.executar_cadastro())
+
+        ctk.CTkLabel(self.container,
+                     text="Seus dados são protegidos: a senha nunca é salva em texto puro.",
+                     font=ctk.CTkFont(size=10), text_color="#999999",
+                     wraplength=300).pack(pady=(4, 0))
+
+        ctk.CTkButton(self.container, text="Cadastrar", command=self.executar_cadastro,
+                      width=300, height=48, font=ctk.CTkFont(size=16, weight="bold"),
+                      fg_color=config.COR_MARROM, hover_color=config.COR_MARROM_HOVER,
+                      text_color="#FFFFFF").pack(pady=20)
+
+    def executar_cadastro(self):
+        nome = seguranca.sanitizar_entrada(self.txt_nome.get())
+        email = seguranca.sanitizar_entrada(self.txt_cad_email.get()).lower()
+        senha = self.txt_cad_senha.get()
+        senha2 = self.txt_cad_senha2.get()
+
+        if not nome or not email or not senha or not senha2:
+            self._erro_cadastro("Preencha todos os campos.")
+            return
+        if not EMAIL_REGEX.match(email):
+            self._erro_cadastro("Formato de e-mail inválido.")
+            return
+
+        senha_ok, motivo = seguranca.validar_forca_senha(senha)
+        if not senha_ok:
+            self._erro_cadastro(motivo)
+            return
+        if senha != senha2:
+            self._erro_cadastro("As senhas não coincidem.")
+            return
+
+        sucesso, mensagem = self.db.criar_usuario(nome, email, senha)
+        if not sucesso:
+            self._erro_cadastro(mensagem)
+            return
+
+        messagebox.showinfo("Sucesso", "Conta criada com sucesso! Faça login para continuar.")
+        self.exibir_login()
+
+    def _erro_cadastro(self, mensagem):
+        self.lbl_status_cadastro.configure(text_color=config.COR_ERRO, text=mensagem)
+
+    # ================= TELA: CATÁLOGO DE PROFISSÕES ================= #
+    def exibir_catalogo_profissoes(self):
+        self.limpar_tela()
+        self.geometry("480x700")
+
+        barra_topo = ctk.CTkFrame(self.container, fg_color="transparent")
+        barra_topo.pack(fill="x", padx=15, pady=(15, 0))
+
+        nome_usuario = self.usuario_logado[0] if self.usuario_logado else ""
+        ctk.CTkLabel(barra_topo, text=f"Olá, {nome_usuario.split(' ')[0]} 👋",
+                     font=ctk.CTkFont(size=14, weight="bold"),
+                     text_color=config.COR_TEXTO).pack(side="left")
+
+        ctk.CTkButton(barra_topo, text="Sair", width=55, height=28, fg_color="transparent",
+                      text_color=config.COR_ERRO, hover_color=config.COR_HOVER_CLARO,
+                      command=self.executar_logout).pack(side="right")
+        ctk.CTkButton(barra_topo, text="📅 Agendamentos", width=130, height=28, fg_color="transparent",
+                      text_color=config.COR_MARROM, hover_color=config.COR_HOVER_CLARO,
+                      command=self.exibir_meus_agendamentos).pack(side="right", padx=6)
+
+        ctk.CTkLabel(self.container, text="Service Clean",
+                     font=ctk.CTkFont(family="Arial", size=26, weight="bold"),
+                     text_color=config.COR_MARROM).pack(pady=(15, 5))
+        ctk.CTkLabel(self.container, text="Selecione a categoria de serviço desejada",
+                     font=ctk.CTkFont(size=12), text_color="#777777").pack(pady=(0, 15))
+
+        scroll_frame = ctk.CTkScrollableFrame(self.container, width=420, height=480,
+                                               fg_color="transparent")
+        scroll_frame.pack(pady=5, fill="both", expand=True, padx=10)
+
+        from dados_profissionais import PROFISSOES
+        profissoes_com_prof = set(self.db.listar_profissoes())
+
+        for profissao in PROFISSOES:
+            tem_profissional = profissao in profissoes_com_prof
+            btn = ctk.CTkButton(
+                scroll_frame,
+                text=profissao if tem_profissional else f"{profissao} (em breve)",
+                font=ctk.CTkFont(size=15, weight="bold"),
+                fg_color=config.COR_CARD if tem_profissional else "#EFEFEF",
+                text_color=config.COR_TEXTO if tem_profissional else "#AAAAAA",
+                hover_color=config.COR_HOVER_CLARO, border_color=config.COR_BORDA,
+                border_width=1, height=55, anchor="w",
+                state="normal" if tem_profissional else "disabled",
+                command=lambda p=profissao: self.exibir_profissionais_perto(p),
             )
-        )
-        input_msg = ft.TextField(hint_text="Digite sua dúvida aqui...", expand=True, bgcolor="#FFFFFF")
+            btn.pack(pady=6, fill="x", padx=10)
 
-        def enviar_mensagem_suporte(e):
-            if input_msg.value:
-                chat_historico.controls.append(
-                    ft.Container(
-                        content=ft.Text(f"👤 Você: {input_msg.value}", color="#FFFFFF"),
-                        padding=10, bgcolor="#212529", border_radius=8, alignment=ft.alignment.center_right
-                    )
-                )
-                chat_historico.controls.append(
-                    ft.Container(
-                        content=ft.Text(
-                            "🤖 Suporte: Entendido! Nossa equipe de segurança monitora as transações do Mercado Pago para garantir seu split de 10% e 90%.",
-                            color="#212529"),
-                        padding=10, bgcolor="#E9ECEF", border_radius=8
-                    )
-                )
-                input_msg.value = ""
-                page.update()
+    def executar_logout(self):
+        self.usuario_logado = None
+        self.exibir_login()
 
-        page.add(
-            ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda e: show_welcome_screen()),
-            ft.Text("Central de Suporte", size=24, weight=ft.FontWeight.BOLD, color="#212529"),
-            ft.Container(content=chat_historico, padding=15, bgcolor="#FFFFFF", border_radius=12, expand=True),
-            ft.Row([input_msg, ft.IconButton(ft.Icons.SEND, icon_color="#212529", on_click=enviar_mensagem_suporte)])
-        )
-        page.update()
+    # ================= TELA: LISTA DE PROFISSIONAIS ================= #
+    def exibir_profissionais_perto(self, profissao):
+        self.limpar_tela()
 
-    # --- TELA: TRABALHE CONOSCO ---
-    def show_trabalhe_conosco_screen():
-        page.clean()
-        page.horizontal_alignment = "start"
-        page.vertical_alignment = "start"
-        page.floating_action_button = None
+        barra_topo = ctk.CTkFrame(self.container, fg_color="transparent", height=40)
+        barra_topo.pack(fill="x", pady=(15, 5), padx=10)
 
-        nome_f = ft.TextField(label="Nome Completo", bgcolor="#FFFFFF")
-        area_f = ft.TextField(label="Área de Atuação", bgcolor="#FFFFFF")
-        preco_f = ft.TextField(label="Preço por Hora / Consulta (R$)", bgcolor="#FFFFFF")
-        local_f = ft.TextField(label="Sua Cidade / Localização", bgcolor="#FFFFFF")
-        hab_f = ft.TextField(label="Suas Habilidades", multiline=True, min_lines=2, bgcolor="#FFFFFF")
+        ctk.CTkButton(barra_topo, text="← Voltar", width=70, fg_color="transparent",
+                      text_color=config.COR_MARROM, font=ctk.CTkFont(weight="bold"),
+                      command=self.exibir_catalogo_profissoes).pack(side="left")
+        ctk.CTkLabel(barra_topo, text=profissao, font=ctk.CTkFont(size=18, weight="bold"),
+                     text_color=config.COR_TEXTO).pack(side="right", padx=15)
 
-        def salvar_profissional(e):
-            if nome_f.value and area_f.value and preco_f.value:
-                PROFISSIONAIS.append({
-                    "id": len(PROFISSIONAIS) + 1,
-                    "nome": nome_f.value,
-                    "area": area_f.value,
-                    "preco": float(preco_f.value),
-                    "localizacao": local_f.value,
-                    "foto": "https://unsplash.com",
-                    "habilidades": hab_f.value,
-                    "avaliacao": 5.0,
-                    "comentarios": []
-                })
-                page.snack_bar = ft.SnackBar(ft.Text("Perfil publicado com sucesso!"), bgcolor="#198754")
-                page.snack_bar.open = True
-                show_welcome_screen()
+        lista_prestadores = self.db.listar_profissionais_por_categoria(profissao)
 
-        page.add(
-            ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda e: show_welcome_screen()),
-            ft.Text("Trabalhe Conosco", size=24, weight=ft.FontWeight.BOLD, color="#212529"),
-            ft.Text("Cadastre seu perfil profissional:", size=14, color="#6C757D"),
-            nome_f, area_f, preco_f, local_f, hab_f,
-            ft.ElevatedButton("Cadastrar Meu Perfil", width=float("inf"),
-                              style=ft.ButtonStyle(bgcolor="#212529", color="#FFFFFF"), on_click=salvar_profissional)
-        )
-        page.update()
+        if not lista_prestadores:
+            ctk.CTkLabel(self.container,
+                         text=f"Nenhum profissional de '{profissao}'\nencontrado perto de você no momento.",
+                         font=ctk.CTkFont(size=14), text_color="#777777").pack(pady=100)
+            return
 
-    # --- TELA: LISTAGEM ---
-    def show_home_screen():
-        page.clean()
-        page.floating_action_button = None
-        lista_layout = ft.Column(spacing=15)
-        lista_ordenada = sorted(PROFISSIONAIS, key=lambda x: x["preco"])
+        scroll_profissionais = ctk.CTkScrollableFrame(self.container, fg_color="transparent")
+        scroll_profissionais.pack(fill="both", expand=True, padx=10, pady=10)
 
-        for pro in lista_ordenada:
-            lista_layout.controls.append(
-                ft.Container(
-                    content=ft.Row([
-                        ft.Image(src=pro["foto"], width=60, height=60, border_radius=30, fit="cover"),
-                        ft.Column([
-                            ft.Text(pro["nome"], weight=ft.FontWeight.BOLD, color="#212529", size=16),
-                            ft.Text(pro["area"], color="#6C757D", size=14),
-                            ft.Text(f"R$ {pro['preco']:.2f}", weight=ft.FontWeight.W_500, color="#212529")
-                        ], expand=True),
-                        ft.ElevatedButton(
-                            "Ver Perfil",
-                            style=ft.ButtonStyle(bgcolor="#212529", color="#FFFFFF"),
-                            on_click=lambda e, p=pro: show_perfil_screen(p)
-                        )
-                    ]),
-                    padding=15, bgcolor="#FFFFFF", border_radius=10,
-                    border=ft.Border(top=ft.BorderSide(1, "#E9ECEF"), bottom=ft.BorderSide(1, "#E9ECEF"),
-                                     left=ft.BorderSide(1, "#E9ECEF"), right=ft.BorderSide(1, "#E9ECEF"))
-                )
-            )
+        for prof in lista_prestadores:
+            card = ctk.CTkFrame(scroll_profissionais, fg_color=config.COR_CARD,
+                                border_color=config.COR_BORDA, border_width=1, height=100)
+            card.pack(fill="x", pady=8, padx=5)
+            card.pack_propagate(False)
 
-        page.add(
-            ft.Row([
-                ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda e: show_welcome_screen()),
-                ft.Text("Profissionais Disponíveis", size=22, weight=ft.FontWeight.BOLD, color="#212529")
-            ]),
-            ft.Text("Exibindo os menores preços primeiro:", size=13, color="#6C757D"),
-            ft.Divider(height=10, color="transparent"),
-            lista_layout
-        )
-        page.update()
+            foto_perfil = ctk.CTkFrame(card, width=50, height=50, fg_color=config.COR_HOVER_CLARO,
+                                       corner_radius=25)
+            foto_perfil.place(x=15, y=15)
+            ctk.CTkLabel(foto_perfil, text=prof["nome"][:2].upper(),
+                        font=ctk.CTkFont(size=14, weight="bold"),
+                        text_color="#777777").place(relx=0.5, rely=0.5, anchor="center")
 
-    # --- TELA: PERFIL ---
-    def show_perfil_screen(pro):
-        nonlocal profissional_selecionado
-        profissional_selecionado = pro
-        page.clean()
-        comentarios_layout = ft.Column(spacing=10)
-        for c in pro["comentarios"]:
-            comentarios_layout.controls.append(
-                ft.Container(
-                    content=ft.Column([
-                        ft.Text(c["usuario"], weight=ft.FontWeight.BOLD, size=13, color="#495057"),
-                        ft.Text(f'"{c["texto"]}"', italic=True, size=13, color="#212529")
-                    ]),
-                    padding=10, bgcolor="#F8F9FA", border_radius=6
-                )
-            )
+            ctk.CTkLabel(card, text=prof["nome"], font=ctk.CTkFont(size=15, weight="bold"),
+                        text_color=config.COR_TEXTO).place(x=80, y=12)
+            ctk.CTkLabel(card, text=f"📍 {prof['bairro']}", font=ctk.CTkFont(size=11),
+                        text_color="#777777").place(x=80, y=35)
+            ctk.CTkLabel(card, text=f"{prof['avaliacao']} • {prof['preco_texto']}",
+                        font=ctk.CTkFont(size=12, weight="bold"),
+                        text_color=config.COR_MARROM).place(x=80, y=55)
 
-        input_usuario = ft.TextField(label="Seu Nome", dense=True, bgcolor="#FFFFFF")
-        input_comentario = ft.TextField(label="Escreva uma avaliação...", multiline=True, min_lines=2,
-                                        bgcolor="#FFFFFF")
+            ctk.CTkButton(card, text="Ver Perfil", width=80, height=30, fg_color=config.COR_MARROM,
+                         hover_color=config.COR_MARROM_HOVER,
+                         command=lambda p=prof: self.exibir_perfil_detalhado(p, profissao)
+                         ).place(x=320, y=30)
 
-        def enviar_comentario(e):
-            if input_usuario.value and input_comentario.value:
-                pro["comentarios"].append({"usuario": input_usuario.value, "texto": input_comentario.value})
-                show_perfil_screen(pro)
+    # ================= TELA: PERFIL DETALHADO ================= #
+    def exibir_perfil_detalhado(self, prof, profissao_origem):
+        self.limpar_tela()
 
-        page.add(
-            ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda e: show_home_screen()),
-            ft.Container(
-                content=ft.Column([
-                    ft.Row([
-                        ft.Image(src=pro["foto"], width=80, height=80, border_radius=40, fit="cover"),
-                        ft.Column([
-                            ft.Text(pro["nome"], size=20, weight=ft.FontWeight.BOLD),
-                            ft.Text(pro["area"], size=15, color="#6C757D"),
-                            ft.Row([ft.Icon(ft.Icons.STAR, color="amber", size=16),
-                                    ft.Text(f"{pro['avaliacao']} (Média)", size=13)])
-                        ])
-                    ]),
-                    ft.Divider(),
-                    ft.Text("Sobre o Profissional / Habilidades", weight=ft.FontWeight.BOLD, size=14),
-                    ft.Text(pro["habilidades"], color="#495057", size=14),
-                    ft.Text(f"Localização: {pro['localizacao']}", size=13, color="#6C757D"),
+        barra_topo = ctk.CTkFrame(self.container, fg_color="transparent")
+        barra_topo.pack(fill="x", padx=10, pady=(15, 0))
 
-                    ft.Divider(),
-                    ft.Text(f"Avaliações dos Clientes ({len(pro['comentarios'])})", weight=ft.FontWeight.BOLD, size=14),
-                    comentarios_layout,
-                    ft.Divider(height=10, color="transparent"),
+        ctk.CTkButton(barra_topo, text="← Ver outros profissionais", fg_color="transparent",
+                      text_color=config.COR_MARROM, font=ctk.CTkFont(weight="bold"),
+                      command=lambda: self.exibir_profissionais_perto(profissao_origem)
+                      ).pack(side="left", padx=5)
+        ctk.CTkButton(barra_topo, text="🔗 Indicar", width=90, fg_color="transparent",
+                      text_color=config.COR_MARROM, font=ctk.CTkFont(weight="bold"),
+                      command=lambda: self.compartilhar_profissional(prof, profissao_origem)
+                      ).pack(side="right", padx=5)
 
-                    # Formulário de novo comentário
-                    ft.Text("Deixe sua avaliação:", weight=ft.FontWeight.BOLD, size=13),
-                    input_usuario,
-                    input_comentario,
-                    ft.TextButton("Postar Comentário", icon=ft.Icons.SEND, on_click=enviar_comentario),
-                    ft.Divider(),
+        foto_grande = ctk.CTkFrame(self.container, width=90, height=90, fg_color=config.COR_HOVER_CLARO,
+                                   corner_radius=45)
+        foto_grande.pack(pady=10)
+        ctk.CTkLabel(foto_grande, text=prof["nome"][:2].upper(),
+                    font=ctk.CTkFont(size=24, weight="bold"),
+                    text_color="#777777").place(relx=0.5, rely=0.5, anchor="center")
 
-                    # Botão para ir ao Checkout
-                    ft.ElevatedButton(
-                        f"Contratar Consulta por R$ {pro['preco']:.2f}",
-                        icon=ft.Icons.CREDIT_CARD,
-                        width=float("inf"),
-                        style=ft.ButtonStyle(bgcolor="#198754", color="#FFFFFF"),
-                        on_click=lambda e: show_checkout_screen()
-                    )
-                ]),
-                padding=15,
-                bgcolor="#FFFFFF",
-                border_radius=12
-            )
-        )
-        page.update()
+        ctk.CTkLabel(self.container, text=prof["nome"], font=ctk.CTkFont(size=22, weight="bold"),
+                    text_color=config.COR_TEXTO).pack()
+        ctk.CTkLabel(self.container,
+                    text=f"{prof['avaliacao']} | Preço de referência: {prof['preco_texto']}",
+                    font=ctk.CTkFont(size=13, weight="bold"), text_color=config.COR_MARROM).pack(pady=5)
 
-        # --- TELA 4: CHECKOUT (Split de Taxas + Dados do Cartão) ---
+        ctk.CTkLabel(self.container, text="📅 Horários Disponíveis",
+                    font=ctk.CTkFont(size=14, weight="bold"),
+                    text_color=config.COR_TEXTO).pack(anchor="w", padx=25, pady=(15, 5))
 
-    def show_checkout_screen():
-        page.clean()
-        pro = profissional_selecionado
-        valor_total = pro["preco"]
-        taxa_app = valor_total * 0.10
-        valor_profissional = valor_total - taxa_app
+        frame_horarios = ctk.CTkFrame(self.container, fg_color=config.COR_CARD,
+                                      border_color=config.COR_BORDA, border_width=1)
+        frame_horarios.pack(fill="x", padx=20, pady=5)
 
-        num_cartao = ft.TextField(label="Número do Cartão", hint_text="0000 0000 0000 0000", max_length=19,
-                                  bgcolor="#FFFFFF")
-        nome_titular = ft.TextField(label="Nome Impresso no Cartão", bgcolor="#FFFFFF")
-        validade_cartao = ft.TextField(label="Validade (MM/AA)", hint_text="MM/AA", max_length=5, expand=True,
-                                       bgcolor="#FFFFFF")
-        cvv_cartao = ft.TextField(label="CVV", hint_text="123", max_length=3, password=True, expand=True,
-                                  bgcolor="#FFFFFF")
-
-        page.add(
-            ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda e: show_perfil_screen(pro)),
-            ft.Text("Checkout de Pagamento Seguro", size=22, weight=ft.FontWeight.BOLD),
-            ft.Container(
-                content=ft.Column([
-                    ft.Text(f"Resumo da transação para: {pro['nome']}", size=14, color="#6C757D"),
-                    ft.Row([ft.Text("Valor Total do Serviço:"),
-                            ft.Text(f"R$ {valor_total:.2f}", weight=ft.FontWeight.BOLD)],
-                           alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                    ft.Row(
-                        [ft.Text("Taxa Retida pela Plataforma (10%):"), ft.Text(f"R$ {taxa_app:.2f}", color="#DC3545")],
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                    ft.Row([ft.Text("Destinado ao Profissional (90%):"),
-                            ft.Text(f"R$ {valor_profissional:.2f}", color="#198754")],
-                           alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                    ft.Divider(),
-                    ft.Text("Dados do Cartão de Crédito", weight=ft.FontWeight.BOLD, size=15), num_cartao, nome_titular,
-                    ft.Row([validade_cartao, cvv_cartao], spacing=10), ft.Divider(height=10, color="transparent"),
-                    ft.ElevatedButton("Efetuar Pagamento via Mercado Pago", icon=ft.Icons.LOCK_CLOCK,
-                                      width=float("inf"), style=ft.ButtonStyle(bgcolor="#009EE3", color="#FFFFFF"),
-                                      on_click=lambda e: processar_pagamento())
-                ]), padding=20, bgcolor="#FFFFFF", border_radius=12
-            )
-        )
-        page.update()
-
-    def processar_pagamento():
-        page.snack_bar = ft.SnackBar(
-            ft.Text("Sucesso! Pagamento aprovado. 10% retido na sua conta e 90% enviado ao profissional."),
-            bgcolor="#198754")
-        page.snack_bar.open = True
-        show_welcome_screen()
-
-        # --- TELA 5: TRABALHE CONOSCO ---
-
-    def show_trabalhe_conosco_screen():
-        page.clean()
-        page.horizontal_alignment = "start"
-        page.vertical_alignment = "start"
-        page.floating_action_button = None
-        nome_f = ft.TextField(label="Nome Completo", bgcolor="#FFFFFF")
-        area_f = ft.TextField(label="Área de Atuação", bgcolor="#FFFFFF")
-        preco_f = ft.TextField(label="Preço por Hora / Consulta (R$)", bgcolor="#FFFFFF")
-        local_f = ft.TextField(label="Sua Cidade / Localização", bgcolor="#FFFFFF")
-        hab_f = ft.TextField(label="Suas Habilidades", multiline=True, min_lines=2, bgcolor="#FFFFFF")
-
-        def salvar_profissional(e):
-            if nome_f.value and area_f.value and preco_f.value:
-                PROFISSIONAIS.append({"id": len(PROFISSIONAIS) + 1, "nome": nome_f.value, "area": area_f.value,
-                                      "preco": float(preco_f.value), "localizacao": local_f.value,
-                                      "foto": "https://unsplash.com", "habilidades": hab_f.value, "avaliacao": 5.0,
-                                      "comentarios": []})
-                page.snack_bar = ft.SnackBar(ft.Text("Perfil publicado com sucesso!"), bgcolor="#198754")
-                page.snack_bar.open = True
-                show_welcome_screen()
-
-        page.add(
-            ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda e: show_welcome_screen()),
-            ft.Text("Trabalhe Conosco", size=24, weight=ft.FontWeight.BOLD, color="#212529"),
-            ft.Text("Cadastre seu perfil profissional:", size=14, color="#6C757D"),
-            nome_f, area_f, preco_f, local_f, hab_f,
-            ft.ElevatedButton("Cadastrar Meu Perfil", width=float("inf"),
-                              style=ft.ButtonStyle(bgcolor="#212529", color="#FFFFFF"), on_click=salvar_profissional)
-        )
-        page.update()
-
-        # --- TELA 6: CENTRAL DE SUPORTE ---
-
-    def show_suporte_screen():
-        page.clean()
-        page.horizontal_alignment = "start"
-        page.vertical_alignment = "start"
-        page.floating_action_button = None
-        chat_historico = ft.Column(scroll="always", height=300, spacing=10)
-        chat_historico.controls.append(
-            ft.Container(content=ft.Text("🤖 Suporte: Olá! Como posso ajudar você hoje?", color="#212529"), padding=10,
-                         bgcolor="#E9ECEF", border_radius=8))
-        input_msg = ft.TextField(hint_text="Digite sua dúvida aqui...", expand=True, bgcolor="#FFFFFF")
-
-        def enviar_mensagem_suporte(e):
-            if input_msg.value:
-                chat_historico.controls.append(
-                    ft.Container(content=ft.Text(f"👤 Você: {input_msg.value}", color="#FFFFFF"), padding=10,
-                                 bgcolor="#212529", border_radius=8, alignment=ft.alignment.center_right))
-                chat_historico.controls.append(ft.Container(content=ft.Text(
-                    "🤖 Suporte: Entendido! Nossa equipe de segurança monitora as transações do Mercado Pago para garantir seu split de 10% e 90%.",
-                    color="#212529"), padding=10, bgcolor="#E9ECEF", border_radius=8))
-                input_msg.value = ""
-                page.update()
-
-        page.add(
-            ft.IconButton(ft.Icons.ARROW_BACK, on_click=lambda e: show_welcome_screen()),
-            ft.Text("Central de Suporte", size=24, weight=ft.FontWeight.BOLD, color="#212529"),
-            ft.Container(content=chat_historico, padding=15, bgcolor="#FFFFFF", border_radius=12, expand=True),
-            ft.Row([input_msg, ft.IconButton(ft.Icons.SEND, icon_color="#212529", on_click=enviar_mensagem_suporte)])
-        )
-        page.update()
-
-        # --- TELA 1: INICIAL (BOAS-VINDAS) ---
-
-    def show_welcome_screen():
-        page.clean()
-        page.horizontal_alignment = "center"
-        page.vertical_alignment = "center"
-
-        page.floating_action_button = ft.FloatingActionButton(
-            content=ft.Row(
-                [ft.Icon(ft.Icons.SUPPORT_AGENT, color="#FFFFFF"), ft.Text("Suporte", color="#FFFFFF")],
-                alignment=ft.MainAxisAlignment.CENTER, spacing=5
-            ),
-            bgcolor="#212529", width=110, on_click=lambda e: show_suporte_screen()
+        disponibilidades = self.db.obter_disponibilidade(prof["id"])
+        self.disponibilidade_selecionada = ctk.IntVar(
+            value=disponibilidades[0]["id"] if disponibilidades else -1
         )
 
-        page.add(
-            ft.Column([
-                ft.Text("ServiceClean Pro", size=28, weight=ft.FontWeight.BOLD, color="#212529"),
-                ft.Text("Sua vida mais fácil com profissionais qualificados", size=14, color="#6C757D"),
-                ft.Divider(height=15, color="transparent"),
-                ft.Image(src="https://unsplash.com", width=350, height=220, fit="cover", border_radius=12),
-                ft.Divider(height=25, color="transparent"),
-                ft.ElevatedButton("Buscar Profissionais", icon=ft.Icons.ARROW_FORWARD, width=350,
-                                  style=ft.ButtonStyle(bgcolor="#212529", color="#FFFFFF", padding=15),
-                                  on_click=lambda e: preparar_e_ir_para_home()),
-                ft.Divider(height=5, color="transparent"),
-                ft.TextButton("Quero ser um profissional (Trabalhe Conosco)", icon=ft.Icons.WORK_OUTLINE,
-                              style=ft.ButtonStyle(color="#495057"), on_click=lambda e: show_trabalhe_conosco_screen())
-            ], horizontal_alignment=ft.CrossAxisAlignment.CENTER)
+        if not disponibilidades:
+            ctk.CTkLabel(frame_horarios, text="Sem horários livres no momento.",
+                        font=ctk.CTkFont(size=12), text_color="#999999").pack(padx=15, pady=10)
+        for disp in disponibilidades:
+            ctk.CTkRadioButton(frame_horarios, text=disp["horario"],
+                               variable=self.disponibilidade_selecionada, value=disp["id"],
+                               fg_color=config.COR_MARROM, text_color=config.COR_TEXTO
+                               ).pack(anchor="w", padx=15, pady=6)
+
+        ctk.CTkLabel(self.container, text="💬 Comentários Recentes",
+                    font=ctk.CTkFont(size=14, weight="bold"),
+                    text_color=config.COR_TEXTO).pack(anchor="w", padx=25, pady=(15, 5))
+
+        scroll_comentarios = ctk.CTkScrollableFrame(self.container, height=100, fg_color="transparent")
+        scroll_comentarios.pack(fill="x", padx=20)
+
+        for coment in self.db.obter_comentarios(prof["id"]):
+            box_coment = ctk.CTkFrame(scroll_comentarios, fg_color=config.COR_CARD,
+                                      border_color=config.COR_BORDA, border_width=1)
+            box_coment.pack(fill="x", pady=4)
+            ctk.CTkLabel(box_coment, text=f'"{coment}"', font=ctk.CTkFont(size=12, slant="italic"),
+                        text_color="#555555", wraplength=360, justify="left").pack(padx=10, pady=8)
+
+        ctk.CTkButton(
+            self.container, text=f"Ir para Pagamento  •  {prof['preco_texto']}",
+            font=ctk.CTkFont(size=16, weight="bold"),
+            fg_color=config.COR_MARROM, hover_color=config.COR_MARROM_HOVER, height=48,
+            state="normal" if disponibilidades else "disabled",
+            command=lambda: self.exibir_checkout(prof, profissao_origem),
+        ).pack(fill="x", padx=20, pady=20)
+
+    def compartilhar_profissional(self, prof, profissao_origem):
+        texto = compartilhamento.gerar_texto_compartilhamento(
+            prof["nome"], profissao_origem, prof["avaliacao"]
         )
-        page.update()
+        link = compartilhamento.gerar_link_whatsapp(texto)
+        try:
+            webbrowser.open(link)
+        except Exception:
+            pass
+        self.clipboard_clear()
+        self.clipboard_append(texto)
+        messagebox.showinfo("Indicar profissional",
+                             "Texto copiado e WhatsApp aberto para você enviar a indicação!")
 
-    def preparar_e_ir_para_home():
-        page.horizontal_alignment = "start"
-        page.vertical_alignment = "start"
-        show_home_screen()
+    # ================= TELA: CHECKOUT / PAGAMENTO ================= #
+    def exibir_checkout(self, prof, profissao_origem):
+        if not self.usuario_logado:
+            messagebox.showerror("Erro", "Você precisa estar logado para agendar.")
+            return
 
-        # Inicia o app abrindo a tela de boas-vindas
+        disp_id = self.disponibilidade_selecionada.get()
+        if disp_id == -1:
+            messagebox.showerror("Erro", "Selecione um horário disponível.")
+            return
 
-    show_welcome_screen()
+        self.limpar_tela()
+
+        _, email_cliente = self.usuario_logado
+        agendamento_id = self.db.criar_agendamento(email_cliente, prof["id"], disp_id)
+        self.agendamento_atual = agendamento_id
+
+        valor_comissao, valor_profissional = pagamento.calcular_split(prof["preco_valor"])
+
+        ctk.CTkButton(self.container, text="← Cancelar", fg_color="transparent",
+                      text_color=config.COR_ERRO, font=ctk.CTkFont(weight="bold"),
+                      command=lambda: self.exibir_profissionais_perto(profissao_origem)
+                      ).pack(anchor="w", padx=15, pady=(15, 0))
+
+        ctk.CTkLabel(self.container, text="Confirmar Pagamento",
+                    font=ctk.CTkFont(size=24, weight="bold"),
+                    text_color=config.COR_MARROM).pack(pady=(15, 20))
+
+        resumo = ctk.CTkFrame(self.container, fg_color=config.COR_CARD,
+                              border_color=config.COR_BORDA, border_width=1)
+        resumo.pack(fill="x", padx=25, pady=5)
+
+        def linha(label, valor, destaque=False):
+            f = ctk.CTkFrame(resumo, fg_color="transparent")
+            f.pack(fill="x", padx=15, pady=6)
+            ctk.CTkLabel(f, text=label, font=ctk.CTkFont(size=13,
+                        weight="bold" if destaque else "normal"),
+                        text_color=config.COR_TEXTO).pack(side="left")
+            ctk.CTkLabel(f, text=valor, font=ctk.CTkFont(size=13, weight="bold"),
+                        text_color=config.COR_MARROM if destaque else "#777777").pack(side="right")
+
+        linha("Profissional", prof["nome"])
+        linha("Serviço", profissao_origem)
+        linha("Valor do serviço (recebe o profissional)", f"R$ {valor_profissional:.2f}")
+        linha("Taxa de serviço do app (10%)", f"R$ {valor_comissao:.2f}")
+        linha("Total a pagar", f"R$ {prof['preco_valor']:.2f}", destaque=True)
+
+        nota = "modo simulado — nenhuma cobrança real" if config.MODO_SIMULADO else "via Pix"
+        ctk.CTkLabel(self.container, text=f"Pagamento {nota}. O valor é dividido automaticamente:\n"
+                                          f"90% para o profissional, 10% para manutenção do app.",
+                    font=ctk.CTkFont(size=11), text_color="#999999", wraplength=340,
+                    justify="center").pack(pady=15)
+
+        ctk.CTkButton(
+            self.container, text=f"Pagar R$ {prof['preco_valor']:.2f} via Pix",
+            font=ctk.CTkFont(size=16, weight="bold"), fg_color=config.COR_MARROM,
+            hover_color=config.COR_MARROM_HOVER, height=48,
+            command=lambda: self.confirmar_pagamento(prof, profissao_origem, disp_id),
+        ).pack(fill="x", padx=25, pady=20)
+
+    def confirmar_pagamento(self, prof, profissao_origem, disp_id):
+        _, email_cliente = self.usuario_logado
+
+        resultado = pagamento.processar_pagamento_pix(
+            valor_total=prof["preco_valor"],
+            pix_key_profissional=prof["pix_key"],
+            nome_cliente=self.usuario_logado[0],
+        )
+
+        if not resultado.sucesso:
+            messagebox.showerror("Pagamento não concluído", resultado.mensagem)
+            return
+
+        self.db.registrar_pagamento(
+            agendamento_id=self.agendamento_atual,
+            valor_total=resultado.valor_total,
+            valor_comissao_app=resultado.valor_comissao_app,
+            valor_profissional=resultado.valor_profissional,
+            pix_txid=resultado.txid,
+            status="confirmado",
+        )
+        self.db.marcar_horario_ocupado(disp_id)
+        self.db.atualizar_status_agendamento(self.agendamento_atual, "Confirmado")
+
+        self.exibir_pos_checkout(prof, profissao_origem, resultado)
+
+    # ================= TELA: PÓS-CHECKOUT ================= #
+    def exibir_pos_checkout(self, prof, profissao_origem, resultado: "pagamento.ResultadoPagamento"):
+        self.limpar_tela()
+
+        ctk.CTkLabel(self.container, text="✅", font=ctk.CTkFont(size=60)).pack(pady=(60, 10))
+        ctk.CTkLabel(self.container, text="Agendamento Confirmado!",
+                    font=ctk.CTkFont(size=22, weight="bold"),
+                    text_color=config.COR_SUCESSO).pack(pady=(0, 10))
+        ctk.CTkLabel(self.container,
+                    text=f"{prof['nome']} ({profissao_origem}) foi notificado(a)\n"
+                         f"e vai atender no horário combinado.",
+                    font=ctk.CTkFont(size=13), text_color="#555555",
+                    justify="center").pack(pady=(0, 20))
+
+        info = ctk.CTkFrame(self.container, fg_color=config.COR_CARD,
+                            border_color=config.COR_BORDA, border_width=1)
+        info.pack(fill="x", padx=30, pady=10)
+        ctk.CTkLabel(info, text=f"ID da transação: {resultado.txid}",
+                    font=ctk.CTkFont(size=11), text_color="#999999").pack(padx=15, pady=(10, 2))
+        ctk.CTkLabel(info, text=f"Valor pago: R$ {resultado.valor_total:.2f}",
+                    font=ctk.CTkFont(size=13, weight="bold"),
+                    text_color=config.COR_TEXTO).pack(padx=15, pady=2)
+        ctk.CTkLabel(info,
+                    text=f"Repasse ao profissional: R$ {resultado.valor_profissional:.2f}\n"
+                         f"Taxa do app (10%): R$ {resultado.valor_comissao_app:.2f}",
+                    font=ctk.CTkFont(size=11), text_color="#777777",
+                    justify="left").pack(padx=15, pady=(2, 10))
+
+        ctk.CTkButton(self.container, text="Ver Meus Agendamentos", height=45,
+                      fg_color=config.COR_MARROM, hover_color=config.COR_MARROM_HOVER,
+                      command=self.exibir_meus_agendamentos).pack(fill="x", padx=30, pady=(25, 8))
+        ctk.CTkButton(self.container, text="Voltar ao Catálogo", height=40, fg_color="transparent",
+                      text_color=config.COR_MARROM, hover_color=config.COR_HOVER_CLARO,
+                      command=self.exibir_catalogo_profissoes).pack(fill="x", padx=30)
+
+    # ================= TELA: MEUS AGENDAMENTOS ================= #
+    def exibir_meus_agendamentos(self):
+        self.limpar_tela()
+
+        ctk.CTkButton(self.container, text="← Voltar", fg_color="transparent",
+                      text_color=config.COR_MARROM, font=ctk.CTkFont(weight="bold"),
+                      command=self.exibir_catalogo_profissoes).pack(anchor="w", padx=15, pady=(15, 0))
+
+        ctk.CTkLabel(self.container, text="Meus Agendamentos",
+                    font=ctk.CTkFont(size=22, weight="bold"),
+                    text_color=config.COR_MARROM).pack(pady=(10, 15))
+
+        _, email_cliente = self.usuario_logado
+        agendamentos = self.db.listar_agendamentos(email_cliente)
+
+        if not agendamentos:
+            ctk.CTkLabel(self.container, text="Você ainda não tem agendamentos.",
+                        font=ctk.CTkFont(size=13), text_color="#777777").pack(pady=60)
+            return
+
+        scroll = ctk.CTkScrollableFrame(self.container, fg_color="transparent")
+        scroll.pack(fill="both", expand=True, padx=15, pady=5)
+
+        for ag in agendamentos:
+            card = ctk.CTkFrame(scroll, fg_color=config.COR_CARD, border_color=config.COR_BORDA,
+                                border_width=1)
+            card.pack(fill="x", pady=6)
+            ctk.CTkLabel(card, text=ag["profissional"], font=ctk.CTkFont(size=14, weight="bold"),
+                        text_color=config.COR_TEXTO).pack(anchor="w", padx=15, pady=(10, 0))
+            ctk.CTkLabel(card, text=f"{ag['categoria']} • {ag['horario'] or '-'}",
+                        font=ctk.CTkFont(size=12), text_color="#777777").pack(anchor="w", padx=15)
+            cor_status = config.COR_SUCESSO if ag["status"] == "Confirmado" else config.COR_MARROM
+            ctk.CTkLabel(card, text=f"Status: {ag['status']}",
+                        font=ctk.CTkFont(size=12, weight="bold"), text_color=cor_status
+                        ).pack(anchor="w", padx=15, pady=(0, 10))
+
 
 if __name__ == "__main__":
-    ft.app(target=main)
+    app = ServiceCleanApp()
+    app.mainloop()
